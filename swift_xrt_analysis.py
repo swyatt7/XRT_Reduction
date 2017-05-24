@@ -31,7 +31,7 @@ from optparse import OptionParser, OptionGroup
 #       Outputs data in csv and html, along with on the screen
 #
 
-#       python swift_xrt_analysis.py -a -n [supernova name] --infopath [/info/path/SN_info.dat]
+#       python swift_xrt_analysis.py -a -n [supernova name]
 #       You can have a file called SN_info.dat that has the structure: name,ra,dec,distance
 #       It will match the supernova name (can be portions of the name)
 #       So you don't have to manually enter the ra, dec, distance everytime.
@@ -79,7 +79,7 @@ def setGlobalVerbose(v):
 	verbose = v
 
 class Spectrum:
-	def __init__(self, sC, sR, bC, bR, bS, bSError, pT, e, mjd, dater, prob, confidence, flux, lum):
+	def __init__(self, sC, sR, bC, bR, bS, bSError, pT, e, mjd, dater, prob, confidence, flux, lum, fluxerr, lumerr):
 		self.sourceCount = sC
 		self.sourceRate = sR
 		self.bgCount = bC
@@ -93,7 +93,9 @@ class Spectrum:
 		self.detection_prob = prob
 		self.confidence = confidence
 		self.flux = flux
+		self.fluxerr = fluxerr
 		self.luminosity = lum
+		self.lumerr = lumerr
 
 class SNInfo:
         def __init__(self, name, ra, dec, dist):
@@ -235,6 +237,21 @@ def Check_Clsetup(cwd):
         if "clfiles" in dirFiles:
                 return False
         return True
+
+def Check_FTools():
+	#I don't really like how I wrote this
+	#But it works
+	#Checks if the terminal can use xselect or xspec
+	fo = open("test.xco", "w")
+	fo.write("test\nexit\nno")
+	fo.close()
+	cmd = "xselect @test.xco > test.xcm"
+	test = subprocess.call(cmd, shell=True)
+	subprocess.call("rm test.xc*", shell=True)
+	if test is 127:
+        	printv("Type 'heainit' into the terminal so that you can access the xselect and xspec commands used in this script", verbose)
+		return False
+	return True
 	
 def AverageRADEC(clfiles):
 	#last ditch effort to get the RA and DEC
@@ -255,9 +272,9 @@ def OutputHtmlTable(data, name):
 	param = "<!DOCTYPE html>\n<html>\n<head>\n<style>\ntable, th, td {\n   border: 1px solid black;\n}\n</style>\n</head>\n<body>"
 	param += "<table>"
 	
-	param += "<tr>\n<th>Date</th>\n<th>MJD</th>\n<th>Exposure</th>\n<th>Source Count</th>\n<th>Source Rate</th>\n<th>BG Count</th>\n<th>BG Rate</th>\n<th>Backed Rate</th>\n<th>Backed Rate Error</th>\n<th>Flux</th>\n<th>Luminosity</th>\n<th>Probability</th>\n<th>Confidence</th>\n"
+	param += "<tr>\n<th>Date</th>\n<th>MJD</th>\n<th>Exposure</th>\n<th>Source Count</th>\n<th>Source Rate</th>\n<th>BG Count</th>\n<th>BG Rate</th>\n<th>Backed Rate</th>\n<th>Backed Rate Error</th>\n<th>Flux</th>\n<th>Flux Error</th>\n<th>Luminosity</th>\n<th>Luminosity Error</th>\n<th>Probability</th>\n<th>Confidence</th>\n"
 	for d in data:
-		param += "<tr>\n<td>"+str(d.date_readable)+"</td>\n<td>"+str(d.mjd)+"</td>\n<td>"+str(d.exposureTime)+"</td>\n<td>"+str(d.sourceCount)+"</td>\n<td>"+str(d.sourceRate)+"</td>\n<td>"+str(d.bgCount)+"</td>\n<td>"+str(d.bgRate)+"</td>\n<td>"+str(d.backedSpectrum)+"</td>\n<td>"+str(d.backedSpectrumError)+"</td>\n<td>"+str(d.flux)+"</td>\n<td>"+str(d.luminosity)+"</td>\n<td>"+str(d.detection_prob)+"</td>\n<td>"+d.confidence+"</td>\n</tr>\n"
+		param += "<tr>\n<td>"+str(d.date_readable)+"</td>\n<td>"+str(d.mjd)+"</td>\n<td>"+str(d.exposureTime)+"</td>\n<td>"+str(d.sourceCount)+"</td>\n<td>"+str(d.sourceRate)+"</td>\n<td>"+str(d.bgCount)+"</td>\n<td>"+str(d.bgRate)+"</td>\n<td>"+str(d.backedSpectrum)+"</td>\n<td>"+str(d.backedSpectrumError)+"</td>\n<td>"+str(d.flux)+"</td>\n<td>"+str(d.fluxerr)+"</td>\n<td>"+str(d.luminosity)+"</td>\n<td>"+str(d.lumerr)+"</td>\n<td>"+str(d.detection_prob)+"</td>\n<td>"+d.confidence+"</td>\n</tr>\n"
 		
 	param += "</table>\n"
 	param += "</body>\n</html>"
@@ -312,7 +329,7 @@ def OutputData(data, name):
 	#outputs the data in to a comma seperated variable file
 	filename = name+"_SpectrumData.csv" if name is not "" else "SpectrumData.csv"
 	fo = open(filename, 'w')
-	fo.write("SourceCount,SourceRate,BGCount,BGRate,BackedSpectrum,BackedSpectrumError,Flux,Luminosity,PercentTotal,ExposureTime,MJD,Date,Probability,Confidence\n")
+	fo.write("SourceCount,SourceRate,BGCount,BGRate,BackedSpectrum,BackedSpectrumError,Flux,FluxError,Luminosity,LuminosityErrorPercentTotal,ExposureTime,MJD,Date,Probability,Confidence\n")
 	for d in data:
 		param = ""
 		param += str(d.sourceCount)+","
@@ -322,7 +339,9 @@ def OutputData(data, name):
 		param += str(d.backedSpectrum)+","
 		param += str(d.backedSpectrumError)+","
 		param += str(d.flux)+","
+		param += str(d.fluxerr)+","
 		param += str(d.luminosity)+","
+		param += str(d.lumerr)+","
 		param += str(d.percentTotal)+","
 		param += str(d.exposureTime)+","
 		param += str(d.mjd)+","
@@ -399,21 +418,40 @@ def GetFlux(rate, nH, energy_range, powerlaw, pathToPimms):
 def GetLuminosity(flux, distance):
         #assumes distance is in mpc
         #converts to cm
-        #returns L = (4piR^2)*f
+        #returns L = (4piD^2)*f
         distance = 3.86E24 * distance
         return 4*math.pi*distance*distance*flux
+
 def MakeGraphs(data, name, energy):
-	mjd = []
-	lum = []
-	for d in data:
-		mjd.append(float(d.mjd))
-		lum.append(float(d.luminosity))
-	plt.plot(mjd, lum, 'r+')
-	#plt.axis([mjd.min() - 5, mjd.max() + 5, lum.min(), lum.max()])
-	plt.xlabel('MJD (days)', fontsize=14)
-	plt.ylabel(r'$L_{'+energy+r'}(\frac{erg}{s})$', fontsize=14)
-	plt.savefig("flux_curve.png")
-	cmd = "mv flux_curve.png ../."
+        mjd = []
+        yax = []
+        yaxerr = []
+
+        plotLum = all(d.luminosity is not 0.0 for d in data)
+        print plotLum
+        for d in data:
+                mjd.append(float(d.mjd))
+                yax.append(float(d.luminosity) if plotLum else float(d.flux))
+                yaxerr.append(float(d.lumerr) if plotLum else float(d.fluxerr))
+
+        ylabel = r'$L_{'+energy+r'}(\frac{erg}{s})$' if plotLum else r'$F_{'+energy+r'}(\frac{erg}{scm^{2}})$'
+        figName = "luminosity_light_curve.png" if plotLum else "flux_light_curve"
+
+        plt.rc('text', usetex=True)
+        plt.rc('font', family='serif')
+
+        miny = min(yax) - 1.1*max(yaxerr)
+        maxy = max(yax) + 1.1*max(yaxerr)
+
+        plt.errorbar(mjd, yax, yerr=yaxerr, fmt='bs', markersize=8, markeredgewidth=1, markerfacecolor='None', markeredgecolor='b')
+
+        plt.axis([min(mjd)-0.5, max(mjd)+0.5, miny, maxy])
+        plt.xlabel(r'$MJD (days)$', fontsize=14)
+        plt.ylabel(ylabel, fontsize=14)
+
+        plt.savefig(figName)
+
+	cmd = "mv "+figName+" ../."
 	subprocess.call(cmd, shell=True)
 
 def ExtractSpectrum(eventFile, sourceRA, sourceDEC, nH, energy_range, powerlaw, pathToPimms, distance, extractBG, pimmsExists):	
@@ -454,6 +492,7 @@ def ExtractSpectrum(eventFile, sourceRA, sourceDEC, nH, energy_range, powerlaw, 
 	percentTotal = 0.0
 	poisson_prob = 0.0
 	poisson_confidence = "N/A"
+	fluxerr = 0.0
 	flux = GetFlux(srcRate, nH, energy_range, powerlaw, pathToPimms) if pimmsExists else 0.0
 	
 	if extractBG:
@@ -487,7 +526,8 @@ def ExtractSpectrum(eventFile, sourceRA, sourceDEC, nH, energy_range, powerlaw, 
 		percentTotal = float(splitSpec[9].split('(')[1]) if len(splitSpec) > 9 else 0.0
 		#if there is a backed rate, then get the flux that corresponds to that
 		flux = GetFlux(backSpectrum, nH, energy_range, powerlaw, pathToPimms) if pimmsExists else 0.0
-        	splitBg = [x for x in xselDict_bg[str(53+girl)].split(' ') if x != '']
+        	fluxerr = GetFlux(backSpectrum_error, nH, energy_range, powerlaw, pathToPimms) if pimmsExists else 0.0
+		splitBg = [x for x in xselDict_bg[str(53+girl)].split(' ') if x != '']
 		bgCount = float(splitBg[2])
 		bgRate = float(splitBg[5])
 		
@@ -505,16 +545,17 @@ def ExtractSpectrum(eventFile, sourceRA, sourceDEC, nH, energy_range, powerlaw, 
         	subprocess.call(cmd, shell=True)
 
 	luminosity = GetLuminosity(flux, float(distance)) if distance is not "" else 0.0
+	lumerr = GetLuminosity(fluxerr, float(distance)) if distance is not "" else 0.0
 
 	if pimmsExists:	
-		printv("Flux (erg/cm/cm/s): " + str(flux), verbose)
-		printv("Luminosity (erg/s): " + str(luminosity), verbose)
+		printv("Flux (erg/cm/cm/s): " + str(flux) + " +/- " + str(fluxerr), verbose)
+		printv("Luminosity (erg/s): " + str(luminosity) + " +/- " + str(lumerr), verbose)
 		printv("", verbose) 
 
         cmd = 'mv source.pi source_'+eventFile.split('.')[0]+'.pi'
         subprocess.call(cmd, shell=True)
 
-	return Spectrum(srcCount, srcRate, bgCount, bgRate, backSpectrum, backSpectrum_error, percentTotal, exposure, mjd, date, poisson_prob, poisson_confidence, flux, luminosity)
+	return Spectrum(srcCount, srcRate, bgCount, bgRate, backSpectrum, backSpectrum_error, percentTotal, exposure, mjd, date, poisson_prob, poisson_confidence, flux, luminosity, fluxerr, lumerr)
 
 def main():
 	#implmented option parsing
@@ -630,25 +671,11 @@ def main():
 	
 		OutputData(data, _name)
 		OutputHtmlTable(data, _name)
-		if CanGraph:
-			MakeGraphs(data, _name, _energyrange)
-		printv("type \"elinks SpectrumData.html\" to view the output html table", verbose)	
 
-def CheckFTools():
-	#I don't really like how I wrote this
-	#But it works
-	#Checks if the terminal can use xselect or xspec
-	fo = open("test.xco", "w")
-	fo.write("test\nexit\nno")
-	fo.close()
-	cmd = "xselect @test.xco > test.xcm"
-	test = subprocess.call(cmd, shell=True)
-	subprocess.call("rm test.xc*", shell=True)
-	if test is 127:
-        	printv("Type 'heainit' into the terminal so that you can access the xselect and xspec commands used in this script", True)
-		return False
-	return True
-	
+		if CanGraph and pimmsExists:
+			MakeGraphs(data, _name, _energyrange)
+
+		printv("type \"elinks SpectrumData.html\" to view the output html table", verbose)		
 if __name__ == "__main__":
-	if CheckFTools():	
+	if Check_FTools():	
 		main()
